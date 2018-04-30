@@ -10,6 +10,7 @@ import argparse
 
 
 THRESHOLD = 10**-3
+BASE_FITNESS = 2
 
 class ChtrModel(object):
 
@@ -61,23 +62,39 @@ class Cycle(object):
 
     def set_moi(self):
         self.moi = (self.n1 + self.n2) / self.N
+        #self.moi = (self.n1) / self.N
 
 
     def poisson_prob(self,k1,k2):
         return ((self.n1/self.N)**k1)*((self.n2/self.N)**k2)*(math.exp(-(self.n1+self.n2)/self.N))/\
                (math.factorial(k1)*math.factorial(k2))
 
-    def infection_proba(self, k):
+    def infection_proba(self, k, b):
 
+        # init the fraction n2
         n2 = 0
         pairs = sum_2_k_pairs(k)
+        P = np.zeros(shape=(k+1, k+1))
+
         for pair in pairs:
             i = pair[0]
             j = pair[1]
 
-            if i != 0 and j != 0 and j/i <= 3:
-                n2 += self.poisson_prob(i, j) * 2 * max(1,(j/i)) * 10000
+            # add the value to the matrix
+            P[i, j] = self.poisson_prob(i, j)
+
+            # co-infection, i wt's j cheaters, 3.5 arbitrarily chosen to limit cheater fitness when there are much less wt
+            if i != 0 and j != 0 :
+                n2 += self.poisson_prob(i, j) * BASE_FITNESS  * max(1, (j+1/i)) * b * j #we have j cheaters, not one,
+                # each has a burst size b
+            # only cheater infection - there are cheaters coming out
+            if i == 0 and j != 0:
+                n2 += self.poisson_prob(i, j) * BASE_FITNESS * j
+        #print("only cheater")
+        #print(sum([P[i,j] for i in range(k+1) for j in range(k+1) if i==0 and j!=0]))
+
         return n2 * self.N
+
 
 
 
@@ -91,6 +108,8 @@ class Cycle(object):
             model.cheater.append(self.n2)   # first iteration' self.n2 is defined
         else:
             dilution_factor = model.n1 / model.wt[-1]   # in each passage we have a dilution factor.
+            if dilution_factor == 1:
+                dilution_factor = 0.001
             self.set_n2(model.cheater[-1] * dilution_factor + self.n1 *10**-6)
             model.cheater.append(self.n2)
 
@@ -101,14 +120,16 @@ class Cycle(object):
 
         self.set_moi()
 
+        print(self.N, self.n1, self.n2, self.moi)
+
         while self.N >= THRESHOLD:
             #update cheater, wt, ecoli and moi
             updatedN = (1 - model.r) * self.N * math.exp(-self.moi) * (2 ** 6)
             if updatedN < THRESHOLD:
                 break
-            updated_n2 = self.infection_proba(self.k)
+            updated_n2 = self.infection_proba(self.k, model.b)
             # we have a wt population which do not infect. the breast size is for particles that infected an ecoli.
-            updated_n1 = self.n1 * (1-math.exp(-self.moi)) * model.b + self.n1 * math.exp(-self.moi)
+            updated_n1 = self.n1 * (1-math.exp(-self.n1/self.N)) * model.b + self.n1 * math.exp(-self.n1/self.N)
 
             self.set_n2(updated_n2)
             self.setN(updatedN)
@@ -156,10 +177,11 @@ def main():
     out = r'/Users/daniellemiller/Google Drive/Lab/Analysis/cheaters model/mdl_passage_cycle.csv'
     #create the model
     mdl = ChtrModel(N=10**9, n1=10**9, G=3569, r=0.3, B=1000, MOI=1)
-    c = Cycle(N=mdl.N, n1=mdl.n1, n2=1000, moi=mdl.moi, k=20)
+    c = Cycle(N=mdl.N, n1=mdl.n1, n2=1000, moi=mdl.moi, k=10)
 
-    num_passages = 30
+    num_passages = 20
     for p in tqdm(range(1, num_passages + 1)):
+        print("passage is : {}".format(p))
         c.simulate_cycle(mdl, p)
 
 
@@ -170,6 +192,8 @@ def main():
     df.to_csv(out, index=False)
 
     sns.pointplot(x='Passage', y='f2', data=df.drop_duplicates('Passage'), color='#D49749')
+    plt.ylim(0,1)
+    plt.savefig(r'/Users/daniellemiller/Google Drive/Lab/Analysis/cheaters model/linear_model_r30_no_max.png')
     plt.show()
 
 
