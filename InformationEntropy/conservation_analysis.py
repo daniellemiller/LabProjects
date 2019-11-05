@@ -55,7 +55,6 @@ def generate_train_matrix(seq, seq_id, w=200):
     dfs.append(profile)
 
     mat = reduce(lambda left,right: pd.merge(left,right, on=['position']), dfs)
-    mat['seq_id'] = seq_id
     return mat
 
 def fit_GMM(train, k=4, dim_reduction=False):
@@ -149,6 +148,7 @@ def run_pipeline(fasta_file, out):
         alias = rec.description
         mat = generate_train_matrix(seq, alias)
         gmm_clusterd = fit_GMM(mat)
+        gmm_clusterd['seq_id'] = alias
         gmm_clusterd.to_csv(os.path.join(out, 'input_mat_{}.csv'.format(alias)))
         i += 1
         prev = alias
@@ -157,10 +157,16 @@ def run_pipeline(fasta_file, out):
 
 
 
-# run analysis
+
+
+
+
+
+####### run analysis #########
 fasta = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/data/Phylogeny/family/Togaviridae/Togaviridae.fasta'
 out = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training'
 
 run_pipeline(fasta, out)
+
 
 
