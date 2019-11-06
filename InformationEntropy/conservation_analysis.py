@@ -14,6 +14,7 @@ import pandas_profiling
 from keras.models import Sequential, Model
 from keras.layers import Activation, Dense, Dropout, Input
 from Bio import SeqIO
+import glob
 
 from selection_model_analysis import get_entropy_profile_per_sequence, get_joint_entropy_profile_per_sequence, deltaG_profile_per_sequence
 
@@ -82,20 +83,22 @@ def fit_GMM(train, k=4, dim_reduction=False):
         gmm = GaussianMixture(n_components=k)
         gmm.fit(encoded_train)
         clusters_gmm = gmm.predict(train)
+        proba = gmm.predict_proba(train)
         train['GMM_clusters'] = clusters_gmm
 
     else:
         gmm = GaussianMixture(n_components=k)
         gmm.fit(train)
         clusters_gmm = gmm.predict(train)
+        proba = gmm.predict_proba(train)
         train['GMM_clusters'] = clusters_gmm
 
+
     # add the label as a string
-    train['GMM_clusters'] = str(int(train['GMM_clusters']))
+    train['GMM_clusters'] = train['GMM_clusters'].apply(lambda x: str(int(x)))
 
     # add probabilities of each point to each cluster
-    proba = gmm.predict_proba(train)
-    for i in range(1,k+1):
+    for i in range(k):
         train['prob_cluster_{}'.format(i)] = proba[:,i]
 
     return train
@@ -156,17 +159,35 @@ def run_pipeline(fasta_file, out):
     print("Done!, saved {} file to {}".format(i, out))
 
 
-
-
-
-
-
-
 ####### run analysis #########
 fasta = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/data/Phylogeny/family/Togaviridae/Togaviridae.fasta'
 out = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training'
 
 run_pipeline(fasta, out)
+
+
+def merge_drops_n_conservation(folder):
+    """
+    merge the training data with conservation data
+    :param folder:
+    :return:
+    """
+
+    # load the merged file as a pickle - note that its really heavy!
+    with open(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/merged.pickle', 'rb') as fp:
+        merged = pickle.load(fp)
+
+    with open(r'/Users/daniellemiller/Google Drive/Msc Bioinformatics/Thesis/mapping.pickle', 'rb') as fp:
+        mapping = pickle.load(fp)
+
+    cols_2_consider = ['Shannon_k{}'.format(k) for k in [1, 2, 3, 4, 5]] + ['Joint_k{}'.format(k) for k in
+                                                                            [1, 2, 3, 4, 5]] + ['DeltaG', 'position']
+    files = glob.glob(folder)
+    for f in files:
+        df = pd.read_csv(f)
+        df = df[cols_2_consider]     # entropies
+        alias = os.path.basename(f).split('_')[-1].split('.cs')[0]
+        id_2_seq = [k for k, v in mapping if k[v] == alias][0] # choose the first seq arbitrarily
 
 
 
