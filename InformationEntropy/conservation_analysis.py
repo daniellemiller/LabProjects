@@ -163,30 +163,73 @@ def run_pipeline(fasta_file, out):
 fasta = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/data/Phylogeny/family/Togaviridae/Togaviridae.fasta'
 out = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training'
 
-run_pipeline(fasta, out)
+##### remove this commet to run the pipeline on all dataset
+#run_pipeline(fasta, out)
 
 
-def merge_drops_n_conservation(folder):
+
+def seq_2_id_mapping(fasta):
     """
-    merge the training data with conservation data
-    :param folder:
+    create a mapping between the refseq id and the sequence numeric value in the iteration
+    :param fasta: a fasta file
+    :return:  a dictionary with seq_num : seq_id
+    """
+    mapping = {}
+    i = 0
+    for rec in tqdm(SeqIO.parse(fasta, 'fasta')):
+        mapping['seq_{}'.format(i)] = rec.description
+    return mapping
+
+def get_median_conservation_score(start, end, seq_id, alias):
+    """
+    return the median conservation score of a drop, by its start and end
+    :param start: start position of a drop
+    :param end: end position of a drop
+    :param seq_id: the refseq id as decribed in the fasta file of a given sequence
+    :param alias: the family alias
+    :return: a float with the median conservation score
+    """
+
+    input_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/{}/{}_out_parsed.csv'.format(alias, seq_id)
+    conv = pd.read_csv(input_file)
+
+    median_conv = conv[conv['position'].isin(list(range(start, end+1)))]['score_bin'].median()
+    return median_conv
+
+
+def merge_drops_n_conservation(alias, drop_type):
+    """
+    merge drops data with conservation data
+    :param alias: the family alias
+    :param drop_type: shannon or joint
     :return:
     """
 
-    # load the merged file as a pickle - note that its really heavy!
-    with open(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/merged.pickle', 'rb') as fp:
-        merged = pickle.load(fp)
+    fasta = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/data/Phylogeny/family/{}/{}.fasta'.format(alias, alias)
+    drops = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/WebDB/combined/{}_stats.csv'.format(alias)
+    train = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}'.format(alias)
+    consv = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/{}'.format(alias)
 
-    with open(r'/Users/daniellemiller/Google Drive/Msc Bioinformatics/Thesis/mapping.pickle', 'rb') as fp:
-        mapping = pickle.load(fp)
+    # create the mapping from seq ti id:
+    mapping = seq_2_id_mapping(fasta)
 
+    # define the
     cols_2_consider = ['Shannon_k{}'.format(k) for k in [1, 2, 3, 4, 5]] + ['Joint_k{}'.format(k) for k in
                                                                             [1, 2, 3, 4, 5]] + ['DeltaG', 'position']
-    files = glob.glob(folder)
+
+    # get median conservation score for each drop
+    drops = pd.read_csv(drops)
+    drops = drops[drops['type'] == drop_type]
+    drops['seq_id'] = drops['seq'].apply(lambda x: mapping[x])
+    drops['median_conservation'] = drops.apply(lambda row: get_median_conservation_score(row['start'], row['end'],
+                                                                                         row['seq_id'], alias), axis = 1)
+
+
+
+    files = glob.glob(os.path.join(train, 'input_*.csv'))
     for f in files:
         df = pd.read_csv(f)
         df = df[cols_2_consider]     # entropies
-        alias = os.path.basename(f).split('_')[-1].split('.cs')[0]
         id_2_seq = [k for k, v in mapping if k[v] == alias][0] # choose the first seq arbitrarily
 
 
