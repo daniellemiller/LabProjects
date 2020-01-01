@@ -192,7 +192,8 @@ def get_median_conservation_score(start, end, seq_id, alias):
     :return: a float with the median conservation score
     """
 
-    input_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/{}/{}_out_parsed.csv'.format(alias, seq_id)
+    input_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/' \
+                 r'recombination_free_fasta/r4s_out_aln_{}_{}_parsed.csv'.format(alias, seq_id)
     conv = pd.read_csv(input_file)
 
     median_conv = conv[conv['pos'].isin(list(range(start, end+1)))]['score_bin'].median()
@@ -286,6 +287,14 @@ def merge_drops_n_conservation(alias, drop_type):
     train = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}'.format(alias)
     consv = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/{}'.format(alias)
 
+    recomb_free_fasta = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/' \
+                 r'recombination_free_fasta/{}.fasta'.format(alias, alias)
+
+    # get the non recombinant ids to consider at the end
+    non_recombinant_ids = []
+    for rec in SeqIO.parse(recomb_free_fasta, 'fasta'):
+        non_recombinant_ids.append(rec.description)
+
     # create the mapping from seq ti id:
     mapping = seq_2_id_mapping(fasta)
 
@@ -298,28 +307,27 @@ def merge_drops_n_conservation(alias, drop_type):
     drops = drops[drops['type'] == drop_type]
     drops['seq_id'] = drops['seq'].apply(lambda x: mapping[x])
 
-    if os.path.exists(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/tmp.pickle'):
-        drops = pd.read_pickle(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/tmp.pickle')
+    if os.path.exists(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/{}_mapped_drops.pickle'.format(alias)):
+        drops = pd.read_pickle(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/{}_mapped_drops.pickle'.format(alias))
     else:
         # remove duplicated seq_i rows
         ids_2_consider = []
         seq_id_used = []
         for key in mapping.keys():
             v = mapping[key]
-            if v in seq_id_used:
+            if v in seq_id_used or v not in non_recombinant_ids:
                 continue
             else:
                 seq_id_used.append(v)
                 ids_2_consider.append(key)
+        print(ids_2_consider)
         drops = drops[drops['seq'].isin(ids_2_consider)]
 
         drops['median_conservation'] = drops.apply(lambda row: get_median_conservation_score(row['start'], row['end'],
                                                                                              row['seq_id'], alias), axis = 1)
 
-        with open(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/tmp.pickle', 'wb') as fp:
+        with open(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/{}_mapped_drops.pickle'.format(alias), 'wb') as fp:
             pickle.dump(drops, fp)
-
-
 
 
     # merge data with train matrix for each id separately
@@ -352,14 +360,303 @@ def merge_drops_n_conservation(alias, drop_type):
 ## here add an example for one family (will run on the cluster)
 ##
 
-merge_drops_n_conservation('Togaviridae', 'shannon')
+#merge_drops_n_conservation('Iflaviridae', 'shannon')
+
+######## post run analysis
+
+EPS = 0.000001
+def enrichment(data, rank):
+    """
+    returns the conservation enrichment score of a given rank
+    :param data: dataframe with drops ids, ranks and conservation score
+    :param rank: int representing the rank class
+    :return: float. the enrichment score for a given rank
+    """
+
+    data = data[data['rank'] == rank]
+    passed = data[data['median_conservation'] <= 5]['drop_id'].unique().shape[0]
+    not_passed = data['drop_id'].unique().shape[0] - passed
+    enriched = np.log((passed + EPS) / (not_passed + EPS))
+
+    return enriched
 
 
 
+def run_enrichments():
+    all_ranked_files = glob.glob(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/*/*rank*.csv')
+    ranks = [1,2,3,4]
+
+    fams = np.unique(np.array([os.path.basename(os.path.dirname(f)) for f in all_ranked_files]))
+
+    enrichments = []
+    for f in tqdm(fams):
+        drops = [pd.read_csv(r) for r in all_ranked_files if f in r]
+        rank_enrichment = {str(k):[] for k in ranks}
+        for drop_data in tqdm(drops):
+            for rank in ranks:
+                cur_df = pd.DataFrame({'family':f, 'rank':rank, 'enrichments':enrichment(drop_data, rank)}, index=[0])
+                enrichments.append(cur_df)
+
+    res = pd.concat(enrichments)
+    return res
 
 
+# aux function
+def get_size(family, seq_id, drop_id, data_type='shannon'):
+    """
+    this function returns the relative nucleotide ratio comparing the the drop and to the entire genome
+    :param family: family name
+    :param seq_id: sequence identifier
+    :param drop_id: drop identifier
+    :param data_type: drop data type. default is shannon and not joint.
+    :return: a list with tuples for each nucleotide in the following order: A,C,G,T. (nuc relative in drop, nuc relative to genome)
+    """
+
+    fasta_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/' \
+                 r'recombination_free_fasta/{}.fasta'.format(family, family)
+
+    seq = ''
+    for rec in SeqIO.parse(fasta_file, 'fasta'):
+        if rec.description == seq_id:
+            seq = str(rec.seq).lower()
+
+    if seq == '':  # this shpuld not happen, here just in case....
+        print("here WTF")
+        print(seq_id, family, drop_id)
+        return 'Not valid! seq_id not in fasta file'
+
+    # now we need to files start and end.
+    ranked_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}/{}_clustered_and_ranked.csv'.format(
+        family, seq_id)
+    ranked = pd.read_csv(ranked_file)
+    drop_positions = ranked[ranked['drop_id'] == drop_id]['position'].values
+
+    start = int(drop_positions.min())
+    end = int(drop_positions.max())
+
+    return end - start + 1
 
 
+def get_start_and_end(family, seq_id, drop_id, data_type='shannon'):
+    """
+    this function returns the relative nucleotide ratio comparing the the drop and to the entire genome
+    :param family: family name
+    :param seq_id: sequence identifier
+    :param drop_id: drop identifier
+    :param data_type: drop data type. default is shannon and not joint.
+    :return: a list with tuples for each nucleotide in the following order: A,C,G,T. (nuc relative in drop, nuc relative to genome)
+    """
 
+    fasta_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/' \
+                 r'recombination_free_fasta/{}.fasta'.format(family, family)
+
+    seq = ''
+    for rec in SeqIO.parse(fasta_file, 'fasta'):
+        if rec.description == seq_id:
+            seq = str(rec.seq).lower()
+
+    if seq == '':  # this shpuld not happen, here just in case....
+        print("here WTF")
+        print(seq_id, family, drop_id)
+        return 'Not valid! seq_id not in fasta file'
+
+    # now we need to files start and end.
+    ranked_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}/{}_clustered_and_ranked.csv'.format(
+        family, seq_id)
+    ranked = pd.read_csv(ranked_file)
+    drop_positions = ranked[ranked['drop_id'] == drop_id]['position'].values
+
+    start = int(drop_positions.min())
+    end = int(drop_positions.max())
+
+    return start, end
+
+
+annotated = r'/Users/daniellemiller/Google Drive/Msc Bioinformatics/Projects/Entropy/conservation_analysis/sequences_annotated_all.gb'
+
+
+def annotate_drop(family, seq_id, drop_id):
+    # now we need to files start and end.
+    ranked_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}/{}_clustered_and_ranked.csv'.format(
+        family, seq_id)
+    ranked = pd.read_csv(ranked_file)
+    drop_positions = ranked[ranked['drop_id'] == drop_id]['position'].values
+
+    start = int(drop_positions.min())
+    end = int(drop_positions.max())
+
+    if start == None or end == None:
+        print("here")
+        return "not valid none object!!"
+
+    # proteins = []
+    types = []
+    products = []
+
+    for rec in SeqIO.parse(annotated, 'gb'):
+        if rec.name == seq_id:
+            break
+    for feature in rec.features:
+        f_start = feature.location.start.real
+        f_end = feature.location.end.real
+        intersection = len(list(set(range(start, end + 1)) & set(range(f_start, f_end + 1))))
+
+        if intersection > (end - start + 1) // 3:
+            types.append(feature.type)
+            if 'product' in feature.qualifiers:
+                products.append(feature.qualifiers['product'])
+            else:
+                products.append(['no product data available'])
+    return products, types
+
+
+def extract_nucleotide_information(family, seq_id, drop_id, data_type='shannon'):
+    """
+    this function returns the relative nucleotide ratio comparing the the drop and to the entire genome
+    :param family: family name
+    :param seq_id: sequence identifier
+    :param drop_id: drop identifier
+    :param data_type: drop data type. default is shannon and not joint.
+    :return: a list with tuples for each nucleotide in the following order: A,C,G,T. (nuc relative in drop, nuc relative to genome)
+    """
+
+    fasta_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/' \
+                 r'recombination_free_fasta/{}.fasta'.format(family, family)
+
+    seq = ''
+    for rec in SeqIO.parse(fasta_file, 'fasta'):
+        if rec.description == seq_id:
+            seq = str(rec.seq).lower()
+
+    if seq == '':  # this shpuld not happen, here just in case....
+        print("here WTF")
+        print(seq_id, family, drop_id)
+        return 'Not valid! seq_id not in fasta file'
+
+    # now we need to files start and end.
+    ranked_file = r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/training/{}/{}_clustered_and_ranked.csv'.format(
+        family, seq_id)
+    ranked = pd.read_csv(ranked_file)
+    drop_positions = ranked[ranked['drop_id'] == drop_id]['position'].values
+
+    start = int(drop_positions.min())
+    end = int(drop_positions.max())
+
+    if start == None or end == None:
+        print("here")
+        return "not valid none object!!"
+
+    drop_sequence = seq[start - 1: end + 1]
+
+    a_total = seq.count('a')
+    c_total = seq.count('c')
+    g_total = seq.count('g')
+    t_total = seq.count('t')
+
+    a_in_drop = drop_sequence.count('a')
+    c_in_drop = drop_sequence.count('c')
+    g_in_drop = drop_sequence.count('g')
+    t_in_drop = drop_sequence.count('t')
+
+    len_drop = len(drop_sequence)
+
+    a_rel_genome = a_in_drop / a_total
+    c_rel_genome = c_in_drop / c_total
+    g_rel_genome = g_in_drop / g_total
+    t_rel_genome = t_in_drop / t_total
+
+    a_rel_drop = a_in_drop / len_drop
+    c_rel_drop = c_in_drop / len_drop
+    g_rel_drop = g_in_drop / len_drop
+    t_rel_drop = t_in_drop / len_drop
+
+    return [(a_rel_genome, a_rel_drop), (c_rel_genome, c_rel_drop), (g_rel_genome, g_rel_drop),
+            (t_rel_genome, t_rel_drop)]
+
+
+def rescale(value, max_range=0.6, min_range=0.3):
+    """
+    rescale deltaG values by random distribution
+    :param value: actual value
+    :param max_range: max range
+    :param min_range: min range
+    :return: rescaled value
+    """
+    scaled = value
+
+    if value > min_range:
+        scaled = (value) * (max_range - min_range) + min_range
+
+    return scaled
+
+def calc_denum_by_seq(vec, thresh=0.3):
+    """
+    calculate denumerator by scaling formula
+    :param vec: vector of numbers
+    :param thresh: threshold for random
+    :return: sum of all scaled value in vec
+    """
+    return sum([(x-thresh)**2 for x in vec])
+
+def rescore_deltag(value, denum, thresh = 0.3):
+    """
+    score deltaG feature by weights
+    :param value:
+    :param denum:
+    :param thresh:
+    :return:
+    """
+    scaled = (value - thresh)**2 / denum
+    return scaled
+
+def generate_deltag_for_rank(data, max_range = 0.6, min_range=0.3):
+    """
+    generate deltag scores for the entire dataset
+    :param data: all drops by seq id
+    :param max_range:
+    :param min_range:
+    :return:
+    """
+
+    # first we need to rescale all delta g values by the same threshold
+    data['scaled_DeltaG'] = data['DeltaG'].apply(lambda x: rescale(x, max_range=max_range, min_range=min_range))
+
+    # now we need to have all denuminators by seq
+    g = data.groupby(['family', 'seq_id'])['scaled_DeltaG'].agg(calc_denum_by_seq).reset_index(name='denum')
+    merged = pd.merge(data, g, on=['family', 'seq_id'])
+
+    merged['scored_DeltaG'] = merged.apply(lambda row: rescore_deltag(row['scaled_DeltaG'], row['denum'], thresh=min_range), axis=1)
+
+    return merged
+
+
+def dropplot(data, feature='median_conservation', genome_len=10 ** 4):
+    mapping = {}
+    vals = np.sort(data[feature].unique())
+    for i, cons in enumerate(vals):
+        mapping[str(cons)] = i
+
+    n_colors = 2
+    if vals.shape[0] > 2:
+        n_colors = max(8, vals.shape[0])
+
+    with sns.plotting_context(rc={"font.size": 14, "axes.titlesize": 18, "axes.labelsize": 18,
+                                  "xtick.labelsize": 14, "ytick.labelsize": 14, 'y.labelsize': 16}):
+
+        pal = sns.mpl_palette('seismic', n_colors)
+        with sns.plotting_context(
+                rc={"font.size": 12, "axes.labelsize": 15, "xtick.labelsize": 14, "ytick.labelsize": 12, 'aspect': 10}):
+            f, ax = plt.subplots(figsize=(14, 4))
+            for i, seq in enumerate(g['seq_id'].unique()):
+                g_tag = data[data['seq_id'] == seq]
+                ax.plot([1, genome_len], [i, i], color="black", alpha=0.7, linewidth=4)
+                for row in g_tag.iterrows():
+                    row = row[1]
+                    ax.scatter([row['start'], row['end']], [i, i], marker='s', s=2 * row['drop_size'],
+                               c=pal[mapping[str(row[feature])]], label="{} {}".format(row['product'], row['start']))
+
+        plt.legend(bbox_to_anchor=[1.1, 1.1])
+        sns.palplot(sns.mpl_palette('seismic', n_colors))
+        plt.show()
 
 
