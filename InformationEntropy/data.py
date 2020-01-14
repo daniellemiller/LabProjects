@@ -37,8 +37,9 @@ def SI_2_SL():
     mapping = {}
     fasta = glob.glob(r'/Volumes/STERNADILABHOME$/volume1/daniellem1/Entropy/conservation_analysis/recombination/'
                  r'recombination_free_fasta/*.fasta')
-    for rec in SeqIO.parse(fasta, 'fasta'):
-        mapping[rec.name] = len(rec.seq)
+    for f in fasta:
+        for rec in SeqIO.parse(f, 'fasta'):
+            mapping[rec.name] = len(rec.seq)
     return mapping
 
 def mapper(data, map_by='TBL'):
@@ -70,7 +71,7 @@ def bin_continous(vec, n_bins=3):
 
 if __name__ == "__main__":
 
-    data = load_data(r'data/train_features.csv')
+    data = load_data(r'data/basic_marix.csv')
     data = mapper(data, 'TBL')
     data = mapper(data, 'SL')
 
@@ -79,9 +80,9 @@ if __name__ == "__main__":
     data['SL_class'] = np.digitize(data['SL'], bin_continous(data['SL'].values))
     data['DS_class'] = np.digitize(data['drop_size'], bin_continous(data['drop_size'].values))
 
-    classes = [0,1,2]
+    classes = [1,2,3]
     metrics = ['TBL_class', 'SL_class', 'DS_class']
-    mapping = {'0': 'LOW', '1':'MED', '2':'HIGH'}
+    mapping = {'1': 'LOW', '2':'MED', '3':'HIGH'}
     #split by metric
     for cls in classes:
         for met in metrics:
@@ -93,4 +94,5 @@ if __name__ == "__main__":
     for k in ks:
         k_data = data.copy()
         k_data['Kmeans_cluster'] = KMeans(n_clusters=k).fit(data).labels_
+
         k_data.to_csv(f"data/train_Kmeans_K{k}.csv", index=False)
