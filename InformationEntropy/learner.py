@@ -1,16 +1,16 @@
 from sklearn import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
+from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold, cross_validate
 
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
-from sklearn.linear_model import LogisticRegression, Ridge, LinearRegression
+from sklearn.linear_model import LogisticRegression, Ridge, LinearRegression, Lasso
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import RBF
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, RandomForestRegressor, GradientBoostingRegressor, GradientBoostingClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.preprocessing import OrdinalEncoder
@@ -25,19 +25,20 @@ import pandas as pd
 from tqdm import tqdm
 
 CLASSIFIERS = [
-    ("KNN-3", KNeighborsClassifier(3)),
-    ("KNN-10", KNeighborsClassifier(10)),
-    ("SVC-linear", SVC(kernel="linear", C=0.025, probability=True)),
-    ("SVC", SVC(gamma=2, C=1, probability=True)),
-    ("GPC", GaussianProcessClassifier(1.0 * RBF(1.0))),
-    ("DT", DecisionTreeClassifier(max_depth=5)),
+    #("KNN-3", KNeighborsClassifier(3)),
+    #("KNN-10", KNeighborsClassifier(10)),
+    #("SVC-linear", SVC(kernel="linear", C=0.025, probability=True)),
+    #("SVC", SVC(gamma=2, C=1, probability=True)),
+    #("GPC", GaussianProcessClassifier(1.0 * RBF(1.0))),
+    #("DT", DecisionTreeClassifier(max_depth=5)),
     ("RF", RandomForestClassifier(max_depth=5, n_estimators=100)),
-    ("NN", MLPClassifier(alpha=1, max_iter=1000)),
+    #("NN", MLPClassifier(alpha=1, max_iter=1000)),
     ("Adaboost", AdaBoostClassifier()),
     ("LR", LogisticRegression(max_iter=10000)),
-    ("LR-noReg", LogisticRegression(C=np.Inf, max_iter=100000)),
-    ("GaussianNB", GaussianNB()),
-    ("QDA", QuadraticDiscriminantAnalysis())
+    #("LR-noReg", LogisticRegression(C=np.Inf, max_iter=100000)),
+    #("GaussianNB", GaussianNB()),
+    #("QDA", QuadraticDiscriminantAnalysis(),
+    ("GBC", GradientBoostingClassifier()),
 ]
 
 
@@ -45,7 +46,8 @@ REGRESSORS = [
         ("LR", LinearRegression()),
         ("RF", RandomForestRegressor()),
         ("Ridge", Ridge(max_iter=10000)),
-        ("GBR", GradientBoostingRegressor())
+        ("GBR", GradientBoostingRegressor(),
+         ("Lasso", Lasso()))
 ]
 
 
@@ -63,8 +65,10 @@ def make_preprocessing_pipeline():
 
 def load_data(fname, transform=True):
     data = pd.read_csv(fname)
-
-    X = data.drop(columns=['median_conservation', 'conserved', 'loc', 'nucleotide_info'])
+    try:
+        X = data.drop(columns=['median_conservation', 'conserved', 'loc', 'nucleotide_info','TBL', 'TBL_class'])
+    except:
+        X = data.drop(columns=['median_conservation', 'conserved', 'loc', 'nucleotide_info'])
     y = data['median_conservation'].astype(int).values
     if transform:
         pipeline = make_preprocessing_pipeline()
@@ -72,6 +76,24 @@ def load_data(fname, transform=True):
 
     return X, y
 
+def features_importance(data, mdl_info):
+    """
+    generate the feature importance data frame
+    :param data: original data frame
+    :param mdl_info: output of cross_validate function
+    :return:
+    """
+    res = []
+    labels = {str(n):data.columns[n] for n in range(len(data.columns))}
+    for idx, estimator in enumerate(mdl_info['estimator']):
+        print("Features sorted by their score for estimator {}:".format(idx))
+        feature_importances = pd.DataFrame(estimator.feature_importances_,
+                                           columns=['importance']).sort_values('importance', ascending=False)
+
+        feature_importances['type'] = feature_importances.apply(lambda row: labels[str(row.name)], axis=1)
+        feature_importances['CV'] = idx
+        res.append(feature_importances)
+    return pd.concat(res)
 
 
 def main(args):
@@ -88,13 +110,13 @@ def main(args):
                 ("Standartize", StandardScaler()),
                 ("Classification", clone(clf))
             ])
-            scores = cross_val_score(std_clf, X, y, cv=clf_cv, scoring="accuracy")
+            scores = cross_validate(std_clf, X, y, cv=clf_cv, scoring="accuracy", return_estimator =True)
 
-            print(name, np.mean(scores), np.std(scores), scores)
-            clf_scores.append(pd.DataFrame({'model':name, 'AUC':np.mean(scores), 'STD':np.std(scores)}, index=[0]))
+            print(name, np.mean(scores['test_score']), np.std(scores['test_score']))
+            clf_scores.append(pd.DataFrame({'model':name, 'ACC':scores['test_score'].mean(), 'STD':scores['test_score'].std()}, index=[0]))
 
         output_path = os.path.join(args.out_path, "accuracies_classifiers.csv")
-        pd.concat(clf_scores).to_csv(output_path)
+        pd.concat(clf_scores).to_csv(output_path, index=False)
 
         reg_scores = []
         reg_cv = KFold(10)
@@ -104,13 +126,13 @@ def main(args):
                 ("Standartize", StandardScaler()),
                 ("Regression", clone(reg))
             ])
-            scores = cross_val_score(std_reg, X, y, cv=reg_cv, scoring="explained_variance")
+            scores = cross_validate(std_reg, X, y, cv=reg_cv, scoring="r2", return_estimator =True)
 
-            print(name, np.mean(scores), np.std(scores), scores)
-            reg_scores.append(pd.DataFrame({'model':name, 'Score':np.mean(scores), 'STD':np.std(scores)}, index=[0]))
+            print(name, np.mean(scores['test_score']), np.std(scores['test_score']))
+            reg_scores.append(pd.DataFrame({'model':name, 'R2':scores['test_score'].mean(), 'STD':scores['test_score'].std()}, index=[0]))
 
         output_path = os.path.join(args.out_path, "accuracies_regression.csv")
-        pd.concat(reg_scores).to_csv(output_path)
+        pd.concat(reg_scores).to_csv(output_path, index=False)
 
 
 
