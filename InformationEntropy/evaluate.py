@@ -3,7 +3,7 @@ import glob
 from sklearn import clone
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, \
     GradientBoostingRegressor, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
 
 from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold, cross_validate
 
@@ -135,17 +135,25 @@ if __name__ == "__main__":
         # ("LR", LogisticRegression(max_iter=10000)),
         ("GBC", GradientBoostingClassifier()),
     ]
+    REGRESSORS = [
+        ("LR", LinearRegression()),
+        ("RF", RandomForestRegressor()),
+        ("Ridge", Ridge(max_iter=10000)),
+        ("GBR", GradientBoostingRegressor()),
+        ("Lasso", Lasso())
+    ]
     files = glob.glob(r'data/train_*.csv')
     for fname in files:
         if 'Kmeans' in fname:
             continue
+        print(fname)
         if os.path.exists(f"data/ACC/{os.path.basename(fname).split('.csv')[0]}CLF_AUC_BY_MODEL.csv"):
             continue
         X, y = process_data(fname)
         n_class = y.shape[1]
         auc_by_mdl = []
 
-        # define once al train, test idxs
+        #define once al train, test idxs
         test_idx_by_fold = proba_mass_split(y, folds=10)
         for name, clf in tqdm(CLASSIFIERS):
             std_clf = Pipeline([
@@ -168,6 +176,22 @@ if __name__ == "__main__":
 
         pd.concat(auc_by_mdl).to_csv(f"data/ACC/{os.path.basename(fname).split('.csv')[0]}CLF_AUC_BY_MODEL.csv", index=False)
 
+        X, y = load_data(fname)
+        reg_scores = []
+        reg_cv = KFold(10)
+        # Iterate over classifiers
+        for name, reg in REGRESSORS:
+            std_reg = Pipeline([
+                ("Standartize", StandardScaler()),
+                ("Regression", clone(reg))
+            ])
+            scores = cross_validate(std_reg, X, y, cv=reg_cv, scoring="r2", return_estimator =True)
 
+            print(name, np.mean(scores['test_score']), np.std(scores['test_score']))
+            reg_scores.append(pd.DataFrame({'model':name, 'R2':scores['test_score'].mean(),
+                                            'STD':scores['test_score'].std()}, index=[0]))
+
+        pd.concat(reg_scores).to_csv(f"data/ACC/{os.path.basename(fname).split('.csv')[0]}_REGR_AUC_BY_MODEL.csv",
+                                     index=False)
 
 

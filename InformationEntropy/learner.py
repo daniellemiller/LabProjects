@@ -46,8 +46,8 @@ REGRESSORS = [
         ("LR", LinearRegression()),
         ("RF", RandomForestRegressor()),
         ("Ridge", Ridge(max_iter=10000)),
-        ("GBR", GradientBoostingRegressor(),
-         ("Lasso", Lasso()))
+        ("GBR", GradientBoostingRegressor()),
+        ("Lasso", Lasso())
 ]
 
 
